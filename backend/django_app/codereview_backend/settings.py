@@ -138,6 +138,8 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
 # AI Service Settings
+AI_SERVICE_URL = env('AI_SERVICE_URL', default='http://ai_service:8000')
+
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
