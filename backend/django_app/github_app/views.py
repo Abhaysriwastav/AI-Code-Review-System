@@ -74,3 +74,13 @@ def scan_local_folder(request):
         return JsonResponse(response.json())
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+@csrf_exempt
+def list_desktop_folders(request):
+    try:
+        import requests
+        ai_service_url = f"{settings.AI_SERVICE_URL}/list-desktop-folders"
+        response = requests.get(ai_service_url)
+        return JsonResponse(response.json())
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
