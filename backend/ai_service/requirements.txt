@@ -1,0 +1,22 @@
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+langchain
+langchain-community
+langgraph
+qdrant-client
+sentence-transformers
+tree-sitter
+tree-sitter-languages
+httpx
+python-multipart
+python-dotenv
+aiohttp
+websockets
+pylint
+bandit
+# For AST parsing
+tree-sitter-python
+tree-sitter-javascript
+tree-sitter-go
