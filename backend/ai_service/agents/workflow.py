@@ -44,54 +44,109 @@ class CodeReviewWorkflow:
         return builder.compile()
 
     async def analyzer_agent(self, state: AgentState):
-        prompt = f"""
-        Analyze this GitHub diff and identify:
-        1. Primary programming language
-        2. List of files changed
-        
-        Diff:
-        {state['diff']}
-        """
-        # In production, we'd use a lightweight model or regex for this
-        return {"language": "python", "files": ["main.py"], "current_agent": "Analyzer"}
+        return {"language": "python", "files": ["scan"], "current_agent": "Analyzer"}
 
     async def static_analysis_agent(self, state: AgentState):
-        # Placeholder: in a real setup, we'd need the actual file content, not just the diff
-        # For now, we simulate static analysis results
         return {"static_analysis_results": {"pylint": [], "bandit": []}, "current_agent": "Static Analysis"}
 
     async def security_agent(self, state: AgentState):
-        prompt = f"Analyze the following code for security vulnerabilities, secret leaks, and unsafe patterns. Consider these files: {state['files']}\n\nCode Diff:\n{state['diff']}"
-        system = """You are a Senior Security Engineer. 
-        Detect: SQL injection, XSS, CSRF, insecure API usage, hardcoded secrets, and unsafe dependencies.
-        Return issues in JSON format matching the CodeIssue schema."""
-        
-        # Simulating structured generation
-        issues = [] # await self.ollama.generate_structured(prompt, List[CodeIssue], system)
-        return {"issues": issues, "current_agent": "Security"}
+        prompt = f"""Analyze the following code for security vulnerabilities.
+Look for: SQL injection, hardcoded secrets, insecure API usage, XSS, CSRF, unsafe dependencies.
+
+Code:
+{state['diff'][:3000]}
+
+List each issue as a JSON array with fields: category, severity (critical/warning/suggestion), issue_description, file_name, line_number.
+Return ONLY valid JSON array, no markdown. Example: [{{"category":"security","severity":"critical","issue_description":"...","file_name":"app.py","line_number":10}}]
+If no issues found return: []"""
+        try:
+            response = await self.ollama.generate(prompt, "You are a Senior Security Engineer. Return ONLY a valid JSON array of issues.")
+            response = response.strip()
+            if "```" in response:
+                response = response.split("```")[1].replace("json","").strip()
+            issues_data = __import__('json').loads(response) if response and response != "[]" else []
+        except Exception as e:
+            print(f"Security agent error: {e}")
+            issues_data = []
+        return {"issues": issues_data, "current_agent": "Security"}
 
     async def performance_agent(self, state: AgentState):
-        prompt = f"Analyze the following code for performance bottlenecks, inefficient loops, and memory leaks.\n\nCode Diff:\n{state['diff']}"
-        system = "You are a Performance Optimization Expert. Focus on complexity, DB query efficiency, and resource management."
-        return {"issues": [], "current_agent": "Performance"}
+        prompt = f"""Analyze the following code for performance issues.
+Look for: inefficient loops, N+1 queries, memory leaks, blocking I/O, redundant computations.
+
+Code:
+{state['diff'][:3000]}
+
+List each issue as a JSON array with fields: category, severity (critical/warning/suggestion), issue_description, file_name, line_number.
+Return ONLY valid JSON array. If no issues found return: []"""
+        try:
+            response = await self.ollama.generate(prompt, "You are a Performance Optimization Expert. Return ONLY a valid JSON array.")
+            response = response.strip()
+            if "```" in response:
+                response = response.split("```")[1].replace("json","").strip()
+            issues_data = __import__('json').loads(response) if response and response != "[]" else []
+        except Exception as e:
+            print(f"Performance agent error: {e}")
+            issues_data = []
+        return {"issues": issues_data, "current_agent": "Performance"}
 
     async def clean_code_agent(self, state: AgentState):
-        prompt = f"Check for readability, architectural consistency, and clean code principles (SOLID, DRY).\n\nCode Diff:\n{state['diff']}"
-        system = "You are a Principal Software Architect. Check for naming conventions, modularity, and maintainability."
-        return {"issues": [], "current_agent": "Clean Code"}
+        prompt = f"""Review this code for clean code violations.
+Check: naming conventions, function length, code duplication (DRY), SOLID principles, complexity.
+
+Code:
+{state['diff'][:3000]}
+
+List each issue as a JSON array with fields: category, severity (critical/warning/suggestion), issue_description, file_name, line_number.
+Return ONLY valid JSON array. If no issues return: []"""
+        try:
+            response = await self.ollama.generate(prompt, "You are a Principal Software Architect. Return ONLY a valid JSON array.")
+            response = response.strip()
+            if "```" in response:
+                response = response.split("```")[1].replace("json","").strip()
+            issues_data = __import__('json').loads(response) if response and response != "[]" else []
+        except Exception as e:
+            print(f"Clean code agent error: {e}")
+            issues_data = []
+        return {"issues": issues_data, "current_agent": "Clean Code"}
 
     async def documentation_agent(self, state: AgentState):
-        prompt = f"Evaluate the documentation and suggest updates for the changed code.\n\nCode Diff:\n{state['diff']}"
-        system = "You are a Technical Writer. Ensure docstrings, README updates, and complex logic explanations are present."
-        return {"issues": [], "current_agent": "Documentation"}
+        prompt = f"""Review this code for documentation quality.
+Check: missing docstrings, unclear variable names, lack of comments on complex logic.
+
+Code:
+{state['diff'][:3000]}
+
+List each issue as a JSON array with fields: category, severity (critical/warning/suggestion), issue_description, file_name, line_number.
+Return ONLY valid JSON array. If no issues return: []"""
+        try:
+            response = await self.ollama.generate(prompt, "You are a Technical Writer. Return ONLY a valid JSON array.")
+            response = response.strip()
+            if "```" in response:
+                response = response.split("```")[1].replace("json","").strip()
+            issues_data = __import__('json').loads(response) if response and response != "[]" else []
+        except Exception as e:
+            print(f"Docs agent error: {e}")
+            issues_data = []
+        return {"issues": issues_data, "current_agent": "Documentation"}
 
     async def summary_agent(self, state: AgentState):
-        issues_summary = "\n".join([f"- {i.category}: {i.issue_description}" for i in state['issues']])
-        prompt = f"Summarize the following code review findings and provide an overall score (0-100).\n\nFindings:\n{issues_summary}"
-        system = "You are a Final Review Aggregator. Prioritize issues and generate a professional summary."
+        issues = state.get('issues', [])
+        issues_text = "\n".join([f"- [{i.get('severity','?').upper()}] {i.get('category','')}: {i.get('issue_description','')}" for i in issues]) if issues else "No issues found."
         
-        summary_text = "Overall, the code looks good but has some security concerns."
-        return {"summary": summary_text, "current_agent": "Summarizer"}
+        prompt = f"""You reviewed code and found these issues:
+{issues_text}
+
+Write a professional 2-3 sentence summary of the code quality and the most important findings.
+Be specific and actionable. Do NOT use bullet points, just plain text."""
+        try:
+            summary_text = await self.ollama.generate(prompt, "You are a Senior Code Review Lead. Be concise and professional.")
+        except Exception as e:
+            print(f"Summary agent error: {e}")
+            total = len(issues)
+            crits = sum(1 for i in issues if i.get('severity') == 'critical')
+            summary_text = f"Found {total} issue(s), {crits} critical. Review the flagged items before merging."
+        return {"summary": summary_text.strip(), "current_agent": "Summarizer"}
 
     async def run(self, diff: str, context: str = ""):
         initial_state = {
