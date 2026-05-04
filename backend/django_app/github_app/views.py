@@ -55,3 +55,22 @@ def github_webhook(request):
             return JsonResponse({'status': 'Review triggered'})
 
     return JsonResponse({'status': 'Ignored'})
+
+@csrf_exempt
+def scan_local_folder(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        path = data.get('path')
+        if not path:
+            return JsonResponse({'error': 'Path required'}, status=400)
+
+        import requests
+        ai_service_url = f"{settings.AI_SERVICE_URL}/scan-local"
+        response = requests.post(ai_service_url, json={'path': path})
+        
+        return JsonResponse(response.json())
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
