@@ -67,13 +67,56 @@ def scan_local_folder(request):
         if not path:
             return JsonResponse({'error': 'Path required'}, status=400)
 
-        import requests
+        import requests as http_requests
         ai_service_url = f"{settings.AI_SERVICE_URL}/scan-local"
-        response = requests.post(ai_service_url, json={'path': path})
-        
-        return JsonResponse(response.json())
+        response = http_requests.post(ai_service_url, json={'path': path}, timeout=120)
+        ai_result = response.json()
+
+        # Save to DB using correct model fields
+        from reviews.models import Review
+        from repositories.models import Repository, PullRequest
+        from django.contrib.auth.models import User
+
+        # Get or create a system user for local scans
+        system_user, _ = User.objects.get_or_create(
+            username='local_scanner',
+            defaults={'email': 'scanner@local.dev'}
+        )
+
+        # Get or create a local-scans repository
+        local_repo, _ = Repository.objects.get_or_create(
+            github_id=0,  # sentinel value for local scans
+            defaults={
+                'name': 'Local Scans',
+                'full_name': 'local/scans',
+                'url': 'http://localhost',
+                'owner': system_user,
+            }
+        )
+
+        # Create a unique PR entry for this scan
+        scan_number = PullRequest.objects.filter(repository=local_repo).count() + 1
+        local_pr = PullRequest.objects.create(
+            repository=local_repo,
+            title=f"Local Scan: {path}",
+            github_id=-(scan_number),   # negative IDs to avoid collision with real PRs
+            number=scan_number,
+            state="completed",
+            diff_url="http://localhost",
+        )
+
+        # Create the Review record
+        Review.objects.create(
+            pull_request=local_pr,
+            summary=ai_result.get('summary', f'Local scan of {path}'),
+            overall_score=80.0,
+            raw_response=ai_result,
+        )
+
+        return JsonResponse({'status': 'completed', 'path': path, 'result': ai_result})
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        import traceback
+        return JsonResponse({'error': str(e), 'trace': traceback.format_exc()}, status=500)
 
 @csrf_exempt
 def list_desktop_folders(request):
