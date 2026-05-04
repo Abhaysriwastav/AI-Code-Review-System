@@ -2,9 +2,9 @@ from typing import TypedDict, List, Annotated, Dict
 from langgraph.graph import StateGraph, END
 import operator
 import json
-from ..schemas.review import CodeIssue, FullReview, ReviewSummary, Severity, Category
-from ..ollama_client import OllamaClient
-from ..static_analysis import StaticAnalyzer
+from schemas.review import CodeIssue, FullReview, ReviewSummary, Severity, Category
+from ollama_client import OllamaClient
+from static_analysis import StaticAnalyzer
 
 class AgentState(TypedDict):
     diff: str
