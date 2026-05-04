@@ -18,7 +18,8 @@ class OllamaClient:
         if system_prompt:
             payload["system"] = system_prompt
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # Mistral on CPU can take 2-5 min — use a 10-minute timeout
+        async with httpx.AsyncClient(timeout=600.0) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             return response.json().get("response", "")

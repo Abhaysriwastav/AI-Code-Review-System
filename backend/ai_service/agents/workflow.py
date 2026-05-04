@@ -66,7 +66,7 @@ If no issues found return: []"""
                 response = response.split("```")[1].replace("json","").strip()
             issues_data = __import__('json').loads(response) if response and response != "[]" else []
         except Exception as e:
-            print(f"Security agent error: {e}")
+            import traceback; traceback.print_exc()
             issues_data = []
         return {"issues": issues_data, "current_agent": "Security"}
 
@@ -86,7 +86,7 @@ Return ONLY valid JSON array. If no issues found return: []"""
                 response = response.split("```")[1].replace("json","").strip()
             issues_data = __import__('json').loads(response) if response and response != "[]" else []
         except Exception as e:
-            print(f"Performance agent error: {e}")
+            import traceback; traceback.print_exc()
             issues_data = []
         return {"issues": issues_data, "current_agent": "Performance"}
 
@@ -106,7 +106,7 @@ Return ONLY valid JSON array. If no issues return: []"""
                 response = response.split("```")[1].replace("json","").strip()
             issues_data = __import__('json').loads(response) if response and response != "[]" else []
         except Exception as e:
-            print(f"Clean code agent error: {e}")
+            import traceback; traceback.print_exc()
             issues_data = []
         return {"issues": issues_data, "current_agent": "Clean Code"}
 
@@ -126,7 +126,7 @@ Return ONLY valid JSON array. If no issues return: []"""
                 response = response.split("```")[1].replace("json","").strip()
             issues_data = __import__('json').loads(response) if response and response != "[]" else []
         except Exception as e:
-            print(f"Docs agent error: {e}")
+            import traceback; traceback.print_exc()
             issues_data = []
         return {"issues": issues_data, "current_agent": "Documentation"}
 
@@ -142,7 +142,7 @@ Be specific and actionable. Do NOT use bullet points, just plain text."""
         try:
             summary_text = await self.ollama.generate(prompt, "You are a Senior Code Review Lead. Be concise and professional.")
         except Exception as e:
-            print(f"Summary agent error: {e}")
+            import traceback; traceback.print_exc()
             total = len(issues)
             crits = sum(1 for i in issues if i.get('severity') == 'critical')
             summary_text = f"Found {total} issue(s), {crits} critical. Review the flagged items before merging."
