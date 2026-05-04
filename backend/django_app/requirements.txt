@@ -1,0 +1,14 @@
+Django>=4.2
+djangorestframework
+django-cors-headers
+django-environ
+psycopg2-binary
+celery[redis]
+requests
+PyJWT
+python-social-auth[django]
+drf-spectacular
+django-filter
+gunicorn
+uvicorn
+whitenoise
