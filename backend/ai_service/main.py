@@ -38,30 +38,54 @@ async def list_desktop_folders():
 @app.post("/scan-local")
 async def scan_local(request: LocalScanRequest):
     try:
-        # Construct absolute path in container
         full_path = os.path.join("/desktop", request.path.lstrip("/"))
         if not os.path.exists(full_path):
             raise HTTPException(status_code=404, detail="Path not found on desktop")
         
-        # Simple implementation: read the first python file found
+        # Directories to skip entirely
+        SKIP_DIRS = {
+            'node_modules', '.git', '__pycache__', '.next', '.venv', 'venv',
+            'env', 'dist', 'build', '.tox', 'coverage', '.mypy_cache',
+            '.pytest_cache', 'migrations', 'staticfiles', 'media'
+        }
+        # File extensions to analyze
+        CODE_EXTS = {'.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.go', '.rs', '.cpp', '.c', '.rb', '.php'}
+
         files = []
         for root, dirs, filenames in os.walk(full_path):
+            # Prune skip dirs in-place so os.walk doesn't recurse into them
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
             for f in filenames:
-                if f.endswith(".py") or f.endswith(".js") or f.endswith(".ts"):
+                ext = os.path.splitext(f)[1].lower()
+                if ext in CODE_EXTS:
                     files.append(os.path.join(root, f))
         
         if not files:
-            return {"message": "No code files found"}
+            return {"message": f"No code files found in '{request.path}'. Supported: {', '.join(CODE_EXTS)}"}
 
-        # Combine contents for analysis
+        # Read up to 10 files, max 500 lines each
         combined_content = ""
-        for file_path in files[:5]: # Limit to 5 files for demo
-            with open(file_path, "r") as f:
-                combined_content += f"\n--- File: {file_path} ---\n"
-                combined_content += f.read()
-            
-        result = await workflow.run(combined_content, f"Local scan of {request.path}")
+        files_analyzed = []
+        for file_path in files[:10]:
+            try:
+                with open(file_path, "r", errors="ignore") as f:
+                    lines = f.readlines()[:500]
+                    rel_path = os.path.relpath(file_path, full_path)
+                    combined_content += f"\n\n--- File: {rel_path} ---\n"
+                    combined_content += "".join(lines)
+                    files_analyzed.append(rel_path)
+            except Exception:
+                continue
+        
+        if not combined_content.strip():
+            return {"message": "Files found but could not be read."}
+
+        result = await workflow.run(combined_content, f"Local scan of {request.path} ({len(files_analyzed)} files)")
+        result['files_analyzed'] = files_analyzed
+        result['total_files_found'] = len(files)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
