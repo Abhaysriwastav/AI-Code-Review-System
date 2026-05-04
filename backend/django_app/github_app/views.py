@@ -67,53 +67,71 @@ def scan_local_folder(request):
         if not path:
             return JsonResponse({'error': 'Path required'}, status=400)
 
-        import requests as http_requests
-        ai_service_url = f"{settings.AI_SERVICE_URL}/scan-local"
-        response = http_requests.post(ai_service_url, json={'path': path}, timeout=120)
-        ai_result = response.json()
+        # Run the scan in a background thread so we return immediately
+        import threading
 
-        # Save to DB using correct model fields
-        from reviews.models import Review
-        from repositories.models import Repository, PullRequest
-        from django.contrib.auth.models import User
+        def run_scan(path):
+            try:
+                import requests as http_requests
+                ai_service_url = f"{settings.AI_SERVICE_URL}/scan-local"
+                # Use a 10-minute timeout — Ollama on CPU is slow
+                response = http_requests.post(ai_service_url, json={'path': path}, timeout=600)
+                ai_result = response.json()
 
-        # Get or create a system user for local scans
-        system_user, _ = User.objects.get_or_create(
-            username='local_scanner',
-            defaults={'email': 'scanner@local.dev'}
-        )
+                from reviews.models import Review
+                from repositories.models import Repository, PullRequest
+                from django.contrib.auth.models import User
 
-        # Get or create a local-scans repository
-        local_repo, _ = Repository.objects.get_or_create(
-            github_id=0,  # sentinel value for local scans
-            defaults={
-                'name': 'Local Scans',
-                'full_name': 'local/scans',
-                'url': 'http://localhost',
-                'owner': system_user,
-            }
-        )
+                system_user, _ = User.objects.get_or_create(
+                    username='local_scanner',
+                    defaults={'email': 'scanner@local.dev'}
+                )
+                local_repo, _ = Repository.objects.get_or_create(
+                    github_id=0,
+                    defaults={
+                        'name': 'Local Scans',
+                        'full_name': 'local/scans',
+                        'url': 'http://localhost',
+                        'owner': system_user,
+                    }
+                )
+                scan_number = PullRequest.objects.filter(repository=local_repo).count() + 1
+                local_pr = PullRequest.objects.create(
+                    repository=local_repo,
+                    title=f"Local Scan: {path}",
+                    github_id=-(scan_number),
+                    number=scan_number,
+                    state="completed",
+                    diff_url="http://localhost",
+                )
+                issues_list = ai_result.get('issues', [])
+                crits = sum(1 for i in issues_list if isinstance(i, dict) and i.get('severity','').lower() == 'critical')
+                warnings = sum(1 for i in issues_list if isinstance(i, dict) and i.get('severity','').lower() == 'warning')
+                suggestions = sum(1 for i in issues_list if isinstance(i, dict) and i.get('severity','').lower() == 'suggestion')
 
-        # Create a unique PR entry for this scan
-        scan_number = PullRequest.objects.filter(repository=local_repo).count() + 1
-        local_pr = PullRequest.objects.create(
-            repository=local_repo,
-            title=f"Local Scan: {path}",
-            github_id=-(scan_number),   # negative IDs to avoid collision with real PRs
-            number=scan_number,
-            state="completed",
-            diff_url="http://localhost",
-        )
+                Review.objects.create(
+                    pull_request=local_pr,
+                    summary=ai_result.get('summary', f'Local scan of {path}'),
+                    overall_score=80.0,
+                    total_issues=len(issues_list),
+                    critical_issues=crits,
+                    warning_issues=warnings,
+                    suggestion_issues=suggestions,
+                    raw_response=ai_result,
+                )
+            except Exception as e:
+                import traceback
+                print(f"[scan_local background error] {e}\n{traceback.format_exc()}")
 
-        # Create the Review record
-        Review.objects.create(
-            pull_request=local_pr,
-            summary=ai_result.get('summary', f'Local scan of {path}'),
-            overall_score=80.0,
-            raw_response=ai_result,
-        )
+        thread = threading.Thread(target=run_scan, args=(path,), daemon=True)
+        thread.start()
 
-        return JsonResponse({'status': 'completed', 'path': path, 'result': ai_result})
+        return JsonResponse({
+            'status': 'scanning',
+            'message': f'AI agents started scanning "{path}". Results will appear in the dashboard in 2-5 minutes.',
+            'path': path
+        })
+
     except Exception as e:
         import traceback
         return JsonResponse({'error': str(e), 'trace': traceback.format_exc()}, status=500)
