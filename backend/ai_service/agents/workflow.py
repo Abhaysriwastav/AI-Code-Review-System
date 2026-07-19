@@ -1,17 +1,15 @@
-from typing import TypedDict, List, Annotated, Dict
+from typing import TypedDict, List, Annotated, Dict, Any
 from langgraph.graph import StateGraph, END
 import operator
 import json
-from schemas.review import CodeIssue, FullReview, ReviewSummary, Severity, Category
 from ollama_client import OllamaClient
-from static_analysis import StaticAnalyzer
 
 class AgentState(TypedDict):
     diff: str
     language: str
     files: List[str]
     context: str
-    issues: Annotated[List[CodeIssue], operator.add]
+    issues: Annotated[List[Dict[str, Any]], operator.add]
     summary: str
     current_agent: str
     static_analysis_results: Dict
@@ -44,12 +42,15 @@ class CodeReviewWorkflow:
         return builder.compile()
 
     async def analyzer_agent(self, state: AgentState):
+        print("\n[Workflow] Starting Code Analysis Workflow...")
         return {"language": "python", "files": ["scan"], "current_agent": "Analyzer"}
 
     async def static_analysis_agent(self, state: AgentState):
+        print("[Workflow] Running Static Analysis Agent...")
         return {"static_analysis_results": {"pylint": [], "bandit": []}, "current_agent": "Static Analysis"}
 
     async def security_agent(self, state: AgentState):
+        print("[Workflow] Running Security Agent (evaluating vulnerability issues)...")
         prompt = f"""Analyze the following code for security vulnerabilities.
 Look for: SQL injection, hardcoded secrets, insecure API usage, XSS, CSRF, unsafe dependencies.
 
@@ -71,6 +72,7 @@ If no issues found return: []"""
         return {"issues": issues_data, "current_agent": "Security"}
 
     async def performance_agent(self, state: AgentState):
+        print("[Workflow] Running Performance Agent (evaluating resource issues)...")
         prompt = f"""Analyze the following code for performance issues.
 Look for: inefficient loops, N+1 queries, memory leaks, blocking I/O, redundant computations.
 
@@ -91,6 +93,7 @@ Return ONLY valid JSON array. If no issues found return: []"""
         return {"issues": issues_data, "current_agent": "Performance"}
 
     async def clean_code_agent(self, state: AgentState):
+        print("[Workflow] Running Clean Code Agent (evaluating design issues)...")
         prompt = f"""Review this code for clean code violations.
 Check: naming conventions, function length, code duplication (DRY), SOLID principles, complexity.
 
@@ -111,6 +114,7 @@ Return ONLY valid JSON array. If no issues return: []"""
         return {"issues": issues_data, "current_agent": "Clean Code"}
 
     async def documentation_agent(self, state: AgentState):
+        print("[Workflow] Running Documentation Agent (evaluating comments & docstrings)...")
         prompt = f"""Review this code for documentation quality.
 Check: missing docstrings, unclear variable names, lack of comments on complex logic.
 
@@ -131,6 +135,7 @@ Return ONLY valid JSON array. If no issues return: []"""
         return {"issues": issues_data, "current_agent": "Documentation"}
 
     async def summary_agent(self, state: AgentState):
+        print("[Workflow] Running Summarizer Agent (compiling final overview)...")
         issues = state.get('issues', [])
         issues_text = "\n".join([f"- [{i.get('severity','?').upper()}] {i.get('category','')}: {i.get('issue_description','')}" for i in issues]) if issues else "No issues found."
         

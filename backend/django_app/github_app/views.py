@@ -109,7 +109,7 @@ def scan_local_folder(request):
                 warnings = sum(1 for i in issues_list if isinstance(i, dict) and i.get('severity','').lower() == 'warning')
                 suggestions = sum(1 for i in issues_list if isinstance(i, dict) and i.get('severity','').lower() == 'suggestion')
 
-                Review.objects.create(
+                review = Review.objects.create(
                     pull_request=local_pr,
                     summary=ai_result.get('summary', f'Local scan of {path}'),
                     overall_score=80.0,
@@ -119,6 +119,22 @@ def scan_local_folder(request):
                     suggestion_issues=suggestions,
                     raw_response=ai_result,
                 )
+
+                from reviews.models import ReviewIssue
+                for issue in issues_list:
+                    if isinstance(issue, dict):
+                        ReviewIssue.objects.create(
+                            review=review,
+                            file_name=issue.get('file_name', 'unknown'),
+                            line_number=issue.get('line_number', 0),
+                            severity=issue.get('severity', 'Suggestion'),
+                            category=issue.get('category', 'Clean Code'),
+                            description=issue.get('issue_description', ''),
+                            explanation=issue.get('explanation', ''),
+                            suggested_fix=issue.get('suggested_fix', ''),
+                            improved_code=issue.get('improved_code', ''),
+                            confidence_score=issue.get('confidence_score', 0.0)
+                        )
             except Exception as e:
                 import traceback
                 print(f"[scan_local background error] {e}\n{traceback.format_exc()}")
