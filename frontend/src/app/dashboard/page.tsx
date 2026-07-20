@@ -19,7 +19,8 @@ import {
   Clock,
   X,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  Sparkles
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { 
@@ -48,6 +49,7 @@ const agents = [
   { id: 'performance', name: 'Performance Review', status: 'idle', icon: Zap },
   { id: 'clean_code', name: 'Clean Code Agent', status: 'idle', icon: Code2 },
   { id: 'docs', name: 'Documentation Agent', status: 'idle', icon: FileText },
+  { id: 'summarizer', name: 'AI Summarizer', status: 'idle', icon: Sparkles },
 ];
 
 export default function Dashboard() {
@@ -174,13 +176,13 @@ export default function Dashboard() {
     setAgentStatuses(agents.map(a => ({ ...a, status: 'idle' })));
     updateStatus('analyzer', 'working');
 
-    const agentOrder = ['analyzer', 'security', 'performance', 'clean_code', 'docs'];
+    const agentOrder = ['analyzer', 'security', 'performance', 'clean_code', 'docs', 'summarizer'];
     const timers: ReturnType<typeof setTimeout>[] = [];
     agentOrder.forEach((id, i) => {
       timers.push(setTimeout(() => {
         if (i > 0) updateStatus(agentOrder[i - 1], 'completed');
         updateStatus(id, 'working');
-      }, i * 40000));
+      }, i * 30000));
     });
 
     try {

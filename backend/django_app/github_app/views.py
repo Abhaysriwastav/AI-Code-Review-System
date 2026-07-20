@@ -140,24 +140,41 @@ def scan_local_folder(request):
                 )
 
                 from reviews.models import ReviewIssue
+
+                def safe_int(val, default=0):
+                    try:
+                        if val is None or val == '' or str(val).strip().lower() in ('none', 'n/a', 'null'):
+                            return default
+                        return int(val)
+                    except (ValueError, TypeError):
+                        return default
+
+                def safe_float(val, default=0.70):
+                    try:
+                        if val is None or val == '' or str(val).strip().lower() in ('none', 'n/a', 'null'):
+                            return default
+                        return float(val)
+                    except (ValueError, TypeError):
+                        return default
+
                 # Confidence defaults by severity when AI doesn't emit one
                 sev_confidence_defaults = {'critical': 0.92, 'warning': 0.78, 'suggestion': 0.65}
                 for issue in issues_list:
                     if isinstance(issue, dict):
-                        sev_key = issue.get('severity', 'suggestion').lower()
+                        sev_key = str(issue.get('severity', 'suggestion') or 'suggestion').lower()
                         default_conf = sev_confidence_defaults.get(sev_key, 0.70)
                         ReviewIssue.objects.create(
                             review=review,
-                            file_name=issue.get('file_name', 'unknown'),
-                            line_number=issue.get('line_number', 0),
-                            severity=issue.get('severity', 'Suggestion'),
-                            category=issue.get('category', 'Clean Code'),
-                            description=issue.get('issue_description', ''),
-                            explanation=issue.get('explanation', ''),
-                            suggested_fix=issue.get('suggested_fix', ''),
-                            improved_code=issue.get('improved_code', ''),
-                            confidence_score=float(issue.get('confidence_score') or default_conf),
-                            compliance_tag=issue.get('compliance_tag', ''),
+                            file_name=str(issue.get('file_name', 'unknown') or 'unknown'),
+                            line_number=safe_int(issue.get('line_number'), 0),
+                            severity=str(issue.get('severity', 'Suggestion') or 'Suggestion'),
+                            category=str(issue.get('category', 'Clean Code') or 'Clean Code'),
+                            description=str(issue.get('issue_description') or issue.get('description') or ''),
+                            explanation=str(issue.get('explanation') or ''),
+                            suggested_fix=str(issue.get('suggested_fix') or ''),
+                            improved_code=str(issue.get('improved_code') or ''),
+                            confidence_score=safe_float(issue.get('confidence_score'), default_conf),
+                            compliance_tag=str(issue.get('compliance_tag') or ''),
                         )
             except Exception as e:
                 import traceback
