@@ -38,7 +38,7 @@ export default function LoginPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Invalid credentials. Please try again.');
+        throw new Error(data.error || 'Incorrect email or password');
       }
 
       if (data.user) {
@@ -47,7 +47,7 @@ export default function LoginPage() {
 
       router.push('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Login failed. Please check your credentials.');
+      setError(err.message || 'Incorrect email or password');
     } finally {
       setLoading(false);
     }

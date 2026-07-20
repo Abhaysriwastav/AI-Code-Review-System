@@ -106,6 +106,24 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Password Hashers - bcrypt with work factor 12+ and PBKDF2 with 600,000+ iterations
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+]
+
+# Redis Cache for Rate Limiting & Account Lockout
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': env('REDIS_URL', default='redis://redis:6379/0'),
+    }
+}
+
+# Email Backend for Lockout Reset Notifications
+EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/

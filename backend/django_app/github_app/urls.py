@@ -14,4 +14,5 @@ urlpatterns = [
     path('auth/login/', auth_views.login_user, name='auth_login'),
     path('auth/logout/', auth_views.logout_user, name='auth_logout'),
     path('auth/me/', auth_views.get_current_user, name='auth_me'),
+    path('auth/password-reset/', auth_views.request_password_reset, name='auth_password_reset'),
 ]

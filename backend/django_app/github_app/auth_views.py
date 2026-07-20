@@ -1,17 +1,30 @@
 import json
 import re
 import html
+import time
 import logging
 from typing import Optional
 from pydantic import BaseModel, EmailStr, field_validator, ValidationError
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 logger = logging.getLogger(__name__)
 
-GENERIC_VALIDATION_ERROR = "Invalid request data. Please check your inputs and try again."
+# Mandatory exact generic auth error message to prevent enumeration
+EXACT_AUTH_ERROR = "Incorrect email or password"
+PASSWORD_RESET_GENERIC_MESSAGE = "If that email is registered, you'll receive a reset link"
+
+
+def get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        return x_forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', '127.0.0.1')
 
 
 def sanitize_input(value: str) -> str:
@@ -21,13 +34,9 @@ def sanitize_input(value: str) -> str:
     """
     if not isinstance(value, str):
         return ""
-    # Unescape HTML entities first (e.g. &lt;script&gt; -> <script>)
     val = html.unescape(value)
-    # Strip HTML and XML tags
     val = re.sub(r'<[^>]*?>', '', val)
-    # Strip dangerous script/event attributes patterns
     val = re.sub(r'(?i)(javascript:|vbscript:|onload=|onerror=|onclick=)', '', val)
-    # Remove null bytes and non-printable control characters
     val = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', val)
     return val.strip()
 
@@ -60,8 +69,8 @@ class RegisterSchema(BaseModel):
     @field_validator('password')
     @classmethod
     def validate_password_length(cls, v: str) -> str:
-        if not (6 <= len(v) <= 128):
-            raise ValueError("Password must be between 6 and 128 characters.")
+        if not (8 <= len(v) <= 128):
+            raise ValueError("Password must be between 8 and 128 characters.")
         return v
 
     @field_validator('first_name', 'last_name')
@@ -93,6 +102,15 @@ class LoginSchema(BaseModel):
         return v
 
 
+class PasswordResetSchema(BaseModel):
+    email: EmailStr
+
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: EmailStr) -> str:
+        return sanitize_input(str(v)).lower()
+
+
 @csrf_exempt
 def register_user(request):
     if request.method != 'POST':
@@ -104,17 +122,17 @@ def register_user(request):
     except (json.JSONDecodeError, ValidationError) as e:
         logger.warning(
             "Registration validation failure from IP %s: %s",
-            request.META.get('REMOTE_ADDR'),
+            get_client_ip(request),
             e.errors() if isinstance(e, ValidationError) else str(e)
         )
-        return JsonResponse({'error': GENERIC_VALIDATION_ERROR}, status=400)
+        return JsonResponse({'error': EXACT_AUTH_ERROR}, status=400)
 
     try:
-        if User.objects.filter(username__iexact=payload.username).exists():
-            return JsonResponse({'error': 'Username is already taken'}, status=400)
-
-        if User.objects.filter(email__iexact=payload.email).exists():
-            return JsonResponse({'error': 'An account with this email already exists'}, status=400)
+        # Non-enumerating duplicate user check
+        if User.objects.filter(username__iexact=payload.username).exists() or \
+           User.objects.filter(email__iexact=payload.email).exists():
+            logger.warning("Registration duplicate attempt for username/email: %s / %s", payload.username, payload.email)
+            return JsonResponse({'error': EXACT_AUTH_ERROR}, status=400)
 
         user = User.objects.create_user(
             username=payload.username,
@@ -139,7 +157,7 @@ def register_user(request):
 
     except Exception as e:
         logger.error("Unexpected error during user registration: %s", e, exc_info=True)
-        return JsonResponse({'error': 'An unexpected server error occurred'}, status=500)
+        return JsonResponse({'error': EXACT_AUTH_ERROR}, status=500)
 
 
 @csrf_exempt
@@ -147,19 +165,41 @@ def login_user(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'POST method required'}, status=405)
 
+    client_ip = get_client_ip(request)
+
+    # 1. IP Rate Limiting: Max 10 requests per IP per minute
+    ip_cache_key = f"ratelimit:ip:{client_ip}"
+    ip_requests = cache.get(ip_cache_key, 0)
+    if ip_requests >= 10:
+        logger.warning("Rate limit exceeded for IP: %s", client_ip)
+        return JsonResponse({'error': EXACT_AUTH_ERROR}, status=429)
+    cache.set(ip_cache_key, ip_requests + 1, timeout=60)
+
     try:
         raw_body = json.loads(request.body)
         payload = LoginSchema(**raw_body)
     except (json.JSONDecodeError, ValidationError) as e:
-        logger.warning(
-            "Login validation failure from IP %s: %s",
-            request.META.get('REMOTE_ADDR'),
-            e.errors() if isinstance(e, ValidationError) else str(e)
-        )
-        return JsonResponse({'error': GENERIC_VALIDATION_ERROR}, status=400)
+        logger.warning("Login validation failure from IP %s: %s", client_ip, e.errors() if isinstance(e, ValidationError) else str(e))
+        return JsonResponse({'error': EXACT_AUTH_ERROR}, status=400)
+
+    identifier = payload.username.lower().strip()
+    lockout_key = f"lockout:{identifier}"
+    failed_attempts_key = f"failed_attempts:{identifier}"
+
+    # 2. Account Lockout Check (15 minutes = 900 seconds)
+    if cache.get(lockout_key):
+        logger.warning("Locked out login attempt for %s from IP %s", identifier, client_ip)
+        return JsonResponse({'error': EXACT_AUTH_ERROR}, status=400)
+
+    # 3. Progressive Delay based on failed attempt count
+    failed_count = cache.get(failed_attempts_key, 0)
+    if failed_count > 0:
+        delay = min(failed_count * 0.5, 3.0)
+        time.sleep(delay)
 
     try:
         username = payload.username
+        matched_user = None
         if '@' in payload.username:
             matched_user = User.objects.filter(email__iexact=payload.username).first()
             if matched_user:
@@ -167,12 +207,40 @@ def login_user(request):
 
         user = authenticate(request, username=username, password=payload.password)
 
-        if user is None:
-            logger.info("Failed login attempt for user/email: %s", payload.username)
-            return JsonResponse({'error': 'Invalid credentials. Please check your username/email and password.'}, status=400)
+        if user is None or not user.is_active:
+            new_failed_count = failed_count + 1
+            cache.set(failed_attempts_key, new_failed_count, timeout=900)
+            logger.info("Failed login attempt #%d for user/email: %s from IP %s", new_failed_count, identifier, client_ip)
 
-        if not user.is_active:
-            return JsonResponse({'error': 'User account is disabled'}, status=400)
+            # Lock account if 5 consecutive failed attempts reached
+            if new_failed_count >= 5:
+                cache.set(lockout_key, True, timeout=900)  # 15 min lockout
+                logger.warning("Account locked out for %s after 5 failed attempts.", identifier)
+
+                # Send email notification with reset link
+                recipient_email = matched_user.email if matched_user else (payload.username if '@' in payload.username else None)
+                if recipient_email:
+                    try:
+                        send_mail(
+                            subject="Security Alert: Account Temporarily Locked",
+                            message=(
+                                f"Hello,\n\nYour account ({identifier}) was temporarily locked due to 5 consecutive failed login attempts.\n"
+                                "If this was you, you can reset your password at: http://localhost:3000/login?reset=true\n"
+                                "If this wasn't you, your account remains secure.\n\nBest,\nCode Reviewer Team"
+                            ),
+                            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@codereviewer.dev'),
+                            recipient_list=[recipient_email],
+                            fail_silently=True,
+                        )
+                        logger.info("Lockout reset notification email sent to %s", recipient_email)
+                    except Exception as mail_err:
+                        logger.error("Failed to send lockout email: %s", mail_err)
+
+            return JsonResponse({'error': EXACT_AUTH_ERROR}, status=400)
+
+        # Successful Login -> Clear failed attempt counters & lockouts
+        cache.delete(failed_attempts_key)
+        cache.delete(lockout_key)
 
         login(request, user)
 
@@ -189,7 +257,35 @@ def login_user(request):
 
     except Exception as e:
         logger.error("Unexpected error during user login: %s", e, exc_info=True)
-        return JsonResponse({'error': 'An unexpected server error occurred'}, status=500)
+        return JsonResponse({'error': EXACT_AUTH_ERROR}, status=500)
+
+
+@csrf_exempt
+def request_password_reset(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST method required'}, status=405)
+
+    try:
+        raw_body = json.loads(request.body)
+        payload = PasswordResetSchema(**raw_body)
+    except (json.JSONDecodeError, ValidationError):
+        return JsonResponse({'message': PASSWORD_RESET_GENERIC_MESSAGE})
+
+    user = User.objects.filter(email__iexact=payload.email).first()
+    if user:
+        logger.info("Password reset requested for registered email: %s", payload.email)
+        try:
+            send_mail(
+                subject="Password Reset Request",
+                message=f"Hello {user.username},\n\nClick the link to reset your password: http://localhost:3000/login?reset=true\n",
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@codereviewer.dev'),
+                recipient_list=[user.email],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
+    return JsonResponse({'message': PASSWORD_RESET_GENERIC_MESSAGE})
 
 
 @csrf_exempt
