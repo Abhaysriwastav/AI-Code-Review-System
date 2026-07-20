@@ -65,6 +65,14 @@ export default function Dashboard() {
   const [compareIdA, setCompareIdA] = useState<string>('');
   const [compareIdB, setCompareIdB] = useState<string>('');
 
+  // Settings State
+  const [settingsModel, setSettingsModel] = useState('mistral');
+  const [settingsUrl, setSettingsUrl] = useState('http://localhost:11434');
+  const [settingsMaxFiles, setSettingsMaxFiles] = useState(30);
+  const [settingsMaxLines, setSettingsMaxLines] = useState(300);
+  const [settingsSkipDirs, setSettingsSkipDirs] = useState('node_modules, .git, __pycache__, .next, .venv, venv, env, dist, build');
+  const [settingsSuccess, setSettingsSuccess] = useState(false);
+
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Dynamic Severity Distribution Chart Data from actual reviews
@@ -105,6 +113,19 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchReviews();
+    
+    // Load settings from localStorage
+    const model = localStorage.getItem('review_settings_model');
+    const url = localStorage.getItem('review_settings_url');
+    const maxFiles = localStorage.getItem('review_settings_max_files');
+    const maxLines = localStorage.getItem('review_settings_max_lines');
+    const skipDirs = localStorage.getItem('review_settings_skip_dirs');
+
+    if (model) setSettingsModel(model);
+    if (url) setSettingsUrl(url);
+    if (maxFiles) setSettingsMaxFiles(Number(maxFiles));
+    if (maxLines) setSettingsMaxLines(Number(maxLines));
+    if (skipDirs) setSettingsSkipDirs(skipDirs);
   }, []);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -164,10 +185,23 @@ export default function Dashboard() {
 
     try {
       // Fire scan — returns immediately with status: 'scanning'
+      const customModel = typeof window !== 'undefined' ? localStorage.getItem('review_settings_model') || 'mistral' : 'mistral';
+      const customUrl = typeof window !== 'undefined' ? localStorage.getItem('review_settings_url') || 'http://host.docker.internal:11434' : 'http://host.docker.internal:11434';
+      const customMaxFiles = typeof window !== 'undefined' ? Number(localStorage.getItem('review_settings_max_files') || 30) : 30;
+      const customMaxLines = typeof window !== 'undefined' ? Number(localStorage.getItem('review_settings_max_lines') || 300) : 300;
+      const customSkipDirs = typeof window !== 'undefined' ? localStorage.getItem('review_settings_skip_dirs') || '' : '';
+
       const response = await fetch('http://localhost:8000/api/github/scan-local/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: folderName }),
+        body: JSON.stringify({
+          path: folderName,
+          model: customModel,
+          url: customUrl,
+          max_files: customMaxFiles,
+          max_lines: customMaxLines,
+          skip_dirs: customSkipDirs
+        }),
       });
       const data = await response.json();
 
@@ -213,6 +247,18 @@ export default function Dashboard() {
 
   const handleNewReview = () => {
     alert("New GitHub Review flow: Please connect your account first using the 'Connect GitHub' button on the landing page.");
+  };
+
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    localStorage.setItem('review_settings_model', settingsModel);
+    localStorage.setItem('review_settings_url', settingsUrl);
+    localStorage.setItem('review_settings_max_files', String(settingsMaxFiles));
+    localStorage.setItem('review_settings_max_lines', String(settingsMaxLines));
+    localStorage.setItem('review_settings_skip_dirs', settingsSkipDirs);
+    
+    setSettingsSuccess(true);
+    setTimeout(() => setSettingsSuccess(false), 3000);
   };
 
   const openReport = async (rev: any) => {
@@ -654,6 +700,87 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+          </div>
+        ) : activeTab === 'settings' ? (
+          <div className="max-w-2xl bg-slate-900/40 border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+            <div>
+              <h2 className="text-xl font-black text-white">Platform Settings</h2>
+              <p className="text-slate-400 text-xs mt-1">Configure your local AI models, scanner limits, and skip rules.</p>
+            </div>
+
+            <form onSubmit={handleSaveSettings} className="space-y-6">
+              {/* Ollama Connection */}
+              <div className="space-y-4">
+                <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">AI Connection</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Ollama Model</label>
+                    <input
+                      type="text"
+                      value={settingsModel}
+                      onChange={(e) => setSettingsModel(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Ollama URL</label>
+                    <input
+                      type="text"
+                      value={settingsUrl}
+                      onChange={(e) => setSettingsUrl(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Scanner Configuration */}
+              <div className="space-y-4 pt-4 border-t border-slate-800">
+                <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">Scanner Preferences</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Max Files per Scan</label>
+                    <input
+                      type="number"
+                      value={settingsMaxFiles}
+                      onChange={(e) => setSettingsMaxFiles(Number(e.target.value))}
+                      className="w-full bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Max Lines per File</label>
+                    <input
+                      type="number"
+                      value={settingsMaxLines}
+                      onChange={(e) => setSettingsMaxLines(Number(e.target.value))}
+                      className="w-full bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">Skipped Directories</label>
+                  <input
+                    type="text"
+                    value={settingsSkipDirs}
+                    onChange={(e) => setSettingsSkipDirs(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">Comma-separated list of folders the scanner should skip.</p>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg transition-colors"
+                >
+                  Save Settings
+                </button>
+                {settingsSuccess && (
+                  <span className="text-xs text-emerald-400 font-medium">✅ Settings saved successfully!</span>
+                )}
+              </div>
+            </form>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-64 text-slate-500">

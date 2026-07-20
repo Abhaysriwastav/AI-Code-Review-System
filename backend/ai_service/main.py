@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
@@ -13,6 +14,11 @@ class ReviewRequest(BaseModel):
 
 class LocalScanRequest(BaseModel):
     path: str  # Path inside the /desktop mount
+    model: Optional[str] = None
+    url: Optional[str] = None
+    max_files: Optional[int] = None
+    max_lines: Optional[int] = None
+    skip_dirs: Optional[str] = None
 
 class ChatRequest(BaseModel):
     code_snippet: str
@@ -96,15 +102,25 @@ async def scan_local(request: LocalScanRequest):
             '.pytest_cache', 'migrations', 'staticfiles', 'media',
             '.idea', '.vscode', 'target', 'bin', 'obj', 'out', '.gradle',
         }
+        if request.skip_dirs:
+            custom_skips = {d.strip() for d in request.skip_dirs.split(',') if d.strip()}
+            SKIP_DIRS.update(custom_skips)
+
         CODE_EXTS = {
             '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.go',
             '.rs', '.cpp', '.c', '.rb', '.php', '.cs', '.swift', '.kt',
         }
         # Single-file scan: read up to 1200 lines
         # Folder scan: read up to 30 files, up to 300 lines each
-        MAX_FILES       = 30
-        MAX_LINES_FILE  = 300   # lines per file
+        MAX_FILES       = request.max_files or 30
+        MAX_LINES_FILE  = request.max_lines or 300   # lines per file
         MAX_CHARS_TOTAL = 24_000  # hard cap on total content sent
+
+        # Override Ollama parameters on-the-fly
+        if request.model:
+            workflow.ollama.model = request.model
+        if request.url:
+            workflow.ollama.base_url = request.url
 
         # ── Walk and rank files ────────────────────────────────────────────────
         def is_single_file(p: str) -> bool:

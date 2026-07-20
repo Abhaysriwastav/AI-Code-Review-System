@@ -70,12 +70,21 @@ def scan_local_folder(request):
         # Run the scan in a background thread so we return immediately
         import threading
 
-        def run_scan(path):
+        scan_options = {
+            'model': data.get('model'),
+            'url': data.get('url'),
+            'max_files': data.get('max_files'),
+            'max_lines': data.get('max_lines'),
+            'skip_dirs': data.get('skip_dirs'),
+        }
+
+        def run_scan(path, options):
             try:
                 import requests as http_requests
                 ai_service_url = f"{settings.AI_SERVICE_URL}/scan-local"
                 # Use a 10-minute timeout — Ollama on CPU is slow
-                response = http_requests.post(ai_service_url, json={'path': path}, timeout=600)
+                payload = {'path': path, **options}
+                response = http_requests.post(ai_service_url, json=payload, timeout=600)
                 if response.status_code != 200:
                     raise Exception(f"AI Service returned status code {response.status_code}: {response.text}")
                 ai_result = response.json()
@@ -154,7 +163,7 @@ def scan_local_folder(request):
                 import traceback
                 print(f"[scan_local background error] {e}\n{traceback.format_exc()}")
 
-        thread = threading.Thread(target=run_scan, args=(path,), daemon=True)
+        thread = threading.Thread(target=run_scan, args=(path, scan_options), daemon=True)
         thread.start()
 
         return JsonResponse({
