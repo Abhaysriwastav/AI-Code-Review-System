@@ -1,4 +1,5 @@
 import json
+import os
 import hmac
 import hashlib
 from django.http import HttpResponse, JsonResponse
@@ -66,6 +67,25 @@ def scan_local_folder(request):
         path = data.get('path')
         if not path:
             return JsonResponse({'error': 'Path required'}, status=400)
+
+        # Resolve path within /desktop if not found directly
+        full_p = os.path.join("/desktop", path.lstrip("/"))
+        if not os.path.exists(full_p):
+            target = os.path.basename(path.rstrip("/"))
+            skip_dirs = {'node_modules', '.git', '__pycache__', '.next', '.venv', 'venv'}
+            found_rel = None
+            for root, dirs, files in os.walk("/desktop"):
+                dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith('.')]
+                if target in dirs or target in files:
+                    found_full = os.path.join(root, target)
+                    found_rel = os.path.relpath(found_full, "/desktop")
+                    break
+            if found_rel:
+                path = found_rel
+            else:
+                return JsonResponse({
+                    'error': f"Folder '{path}' was not found under your Desktop workspace. Please click 'Local Review' to select folders directly."
+                }, status=404)
 
         # Run the scan in a background thread so we return immediately
         import threading

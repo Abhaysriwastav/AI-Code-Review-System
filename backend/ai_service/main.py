@@ -91,10 +91,6 @@ async def list_desktop_folders(path: str = ""):
 @app.post("/scan-local")
 async def scan_local(request: LocalScanRequest):
     try:
-        full_path = os.path.join("/desktop", request.path.lstrip("/"))
-        if not os.path.exists(full_path):
-            raise HTTPException(status_code=404, detail="Path not found on desktop")
-
         # ── Config ────────────────────────────────────────────────────────────
         SKIP_DIRS = {
             'node_modules', '.git', '__pycache__', '.next', '.venv', 'venv',
@@ -105,6 +101,24 @@ async def scan_local(request: LocalScanRequest):
         if request.skip_dirs:
             custom_skips = {d.strip() for d in request.skip_dirs.split(',') if d.strip()}
             SKIP_DIRS.update(custom_skips)
+
+        full_path = os.path.join("/desktop", request.path.lstrip("/"))
+        if not os.path.exists(full_path):
+            # Attempt automatic fallback resolution by searching for matching folder/file name on Desktop
+            target = os.path.basename(request.path.rstrip("/"))
+            found = None
+            for root, dirs, files in os.walk("/desktop"):
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith('.')]
+                if target in dirs or target in files:
+                    found = os.path.join(root, target)
+                    break
+            if found:
+                full_path = found
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Folder '{request.path}' was not found in /desktop. Please click 'Local Review' to pick subfolders."
+                )
 
         CODE_EXTS = {
             '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.go',
