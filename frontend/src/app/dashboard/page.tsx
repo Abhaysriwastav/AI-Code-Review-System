@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, 
   GitPullRequest, 
@@ -54,9 +55,15 @@ export default function Dashboard() {
   const [selectedReview, setSelectedReview] = useState<any | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [desktopFolders, setDesktopFolders] = useState<string[]>([]);
+  const [desktopFiles, setDesktopFiles] = useState<string[]>([]);
+  const [pickerPath, setPickerPath] = useState<string>('');
+  const [pickerParent, setPickerParent] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [agentStatuses, setAgentStatuses] = useState(agents.map(a => ({ ...a, status: 'idle' })));
   const [reviews, setReviews] = useState<any[]>([]);
+  const [showCompareModal, setShowCompareModal] = useState(false);
+  const [compareIdA, setCompareIdA] = useState<string>('');
+  const [compareIdB, setCompareIdB] = useState<string>('');
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -112,11 +119,19 @@ export default function Dashboard() {
     fileInputRef.current?.click();
   };
 
-  const fetchFolders = async () => {
+  const fetchFolders = async (subpath: string = '') => {
     try {
-      const response = await fetch('http://localhost:8000/api/github/list-folders/');
+      // Ensure subpath is always a plain string (guard against accidental object passing)
+      const safePath = typeof subpath === 'string' ? subpath : '';
+      const params = safePath ? `?path=${encodeURIComponent(safePath)}` : '';
+      const url = `http://localhost:8000/api/github/list-folders/${params}`;
+      const response = await fetch(url);
       const data = await response.json();
-      setDesktopFolders(data.folders || []);
+      setDesktopFolders(Array.isArray(data.folders) ? data.folders : []);
+      setDesktopFiles(Array.isArray(data.files) ? data.files : []);
+      setPickerPath(typeof data.current_path === 'string' ? data.current_path : '');
+      // parent_path: null means we're at root; '' means go to root; string means go there
+      setPickerParent(data.parent_path !== undefined ? String(data.parent_path ?? '') : null);
       setShowPicker(true);
     } catch (error) {
       alert("Could not fetch desktop folders. Make sure Docker is running.");
@@ -211,6 +226,40 @@ export default function Dashboard() {
     }
   };
 
+  // Analytics calculations
+  const totalScans = reviews.length;
+  const firstScan = reviews[reviews.length - 1];
+  const latestScan = reviews[0];
+  const initialScore = firstScan ? (firstScan.overall_score || 0) : 0;
+  const currentScore = latestScan ? (latestScan.overall_score || 0) : 0;
+  const scoreDiff = currentScore - initialScore;
+
+  const scoreTrendData = [...reviews]
+    .reverse()
+    .slice(-10)
+    .map((r) => ({
+      name: `Scan #${r.id}`,
+      Score: Math.round(r.overall_score || 0),
+      Critical: r.critical_issues || 0,
+      Warning: r.warning_issues || 0,
+      Suggestion: r.suggestion_issues || 0,
+    }));
+
+  let totalCrits = 0;
+  let totalWarns = 0;
+  let totalSuggs = 0;
+  reviews.forEach(r => {
+    totalCrits += r.critical_issues || 0;
+    totalWarns += r.warning_issues || 0;
+    totalSuggs += r.suggestion_issues || 0;
+  });
+
+  const categoriesData = [
+    { name: 'Critical', count: totalCrits, fill: '#ef4444' },
+    { name: 'Warnings', count: totalWarns, fill: '#f59e0b' },
+    { name: 'Suggestions', count: totalSuggs, fill: '#10b981' },
+  ];
+
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden">
       {/* Report Detail Modal */}
@@ -281,13 +330,14 @@ export default function Dashboard() {
               type="file"
               ref={fileInputRef}
               style={{ display: 'none' }}
+              // @ts-ignore
               webkitdirectory="true"
               directory="true"
               multiple
               onChange={handleFileSelect}
             />
             <button
-              onClick={fetchFolders}
+              onClick={() => fetchFolders('')}
               disabled={isScanning}
               className={`px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white border border-slate-600 rounded-lg font-medium transition-all ${isScanning ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
@@ -295,32 +345,71 @@ export default function Dashboard() {
             </button>
               
               {showPicker && (
-                <div className="absolute top-12 right-0 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-50 overflow-hidden">
-                  <div className="p-3 border-b border-slate-800 bg-slate-800/50">
-                    <p className="text-xs font-bold text-slate-400 uppercase">Select Folder from Desktop</p>
+                <div className="absolute top-12 right-0 w-72 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-50 overflow-hidden">
+                  {/* Header */}
+                  <div className="p-3 border-b border-slate-800 bg-slate-800/50 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {pickerParent !== null && (
+                        <button onClick={() => fetchFolders(pickerParent!)} className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white shrink-0">
+                          ←
+                        </button>
+                      )}
+                      <p className="text-xs font-bold text-slate-400 uppercase truncate">
+                        {pickerPath ? `📂 ${pickerPath.split('/').pop()}` : '🖥️ Desktop'}
+                      </p>
+                    </div>
+                    <button onClick={() => setShowPicker(false)} className="text-slate-500 hover:text-white text-xs shrink-0">✕</button>
                   </div>
-                  <div className="max-h-60 overflow-y-auto">
-                    {desktopFolders.length > 0 ? desktopFolders.map(folder => (
-                      <button 
+
+                  {/* Scan current folder button */}
+                  {pickerPath && (
+                    <button
+                      onClick={() => { handleLocalReview(pickerPath); setShowPicker(false); }}
+                      className="w-full px-4 py-2.5 text-xs font-bold text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 border-b border-slate-800 transition-colors flex items-center gap-2"
+                    >
+                      <span>⚡</span> Scan this folder
+                    </button>
+                  )}
+
+                  <div className="max-h-64 overflow-y-auto">
+                    {/* Subfolders */}
+                    {desktopFolders.map(folder => (
+                      <button
                         key={folder}
-                        onClick={() => handleLocalReview(folder)}
-                        className="w-full text-left px-4 py-3 text-sm hover:bg-indigo-500/10 hover:text-indigo-400 transition-colors border-b border-slate-800/50 last:border-0"
+                        onClick={() => fetchFolders(pickerPath ? `${pickerPath}/${folder}` : folder)}
+                        className="w-full text-left px-4 py-2.5 text-sm hover:bg-slate-800 transition-colors border-b border-slate-800/50 last:border-0 flex items-center gap-2"
                       >
-                        {folder}
+                        <span className="text-base">📁</span>
+                        <span className="truncate">{folder}</span>
+                        <span className="ml-auto text-slate-600 text-xs">›</span>
                       </button>
-                    )) : (
-                      <p className="p-4 text-sm text-slate-500">No folders found on Desktop.</p>
+                    ))}
+
+                    {/* Code files in current folder */}
+                    {desktopFiles.map(file => (
+                      <button
+                        key={file}
+                        onClick={() => { handleLocalReview(pickerPath ? `${pickerPath}/${file}` : file); setShowPicker(false); }}
+                        className="w-full text-left px-4 py-2.5 text-xs hover:bg-slate-800 transition-colors border-b border-slate-800/50 last:border-0 flex items-center gap-2 text-emerald-400"
+                      >
+                        <span className="text-base">📄</span>
+                        <span className="truncate font-mono">{file}</span>
+                      </button>
+                    ))}
+
+                    {desktopFolders.length === 0 && desktopFiles.length === 0 && (
+                      <p className="p-4 text-sm text-slate-500 text-center">No folders or code files here.</p>
                     )}
                   </div>
-                  <button 
-                    onClick={() => setShowPicker(false)}
-                    className="w-full p-2 text-xs text-slate-500 hover:text-white bg-slate-950/50"
-                  >
-                    Close
-                  </button>
                 </div>
               )}
             </div>
+            <button 
+              onClick={() => setShowCompareModal(true)}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg font-medium transition-all"
+            >
+              Compare Scans
+            </button>
             <button 
               onClick={handleNewReview}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-all shadow-lg shadow-indigo-500/20"
@@ -487,6 +576,85 @@ export default function Dashboard() {
               </table>
             </motion.div>
           </>
+        ) : activeTab === 'analytics' ? (
+          <div className="space-y-8">
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+              <h2 className="text-xl font-black text-white">Vulnerability & Quality Analytics</h2>
+              <p className="text-slate-400 text-xs mt-1">Deep analysis of scans, score progression, and compliance metrics.</p>
+            </motion.div>
+
+            {/* Metrics cards row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Score Development</p>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-black text-white">{Math.round(currentScore)}</span>
+                  {scoreDiff !== 0 && (
+                    <span className={`text-xs font-bold ${scoreDiff > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {scoreDiff > 0 ? `+${Math.round(scoreDiff)}` : Math.round(scoreDiff)} since start
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Total Issues Scanned</p>
+                <span className="text-2xl font-black text-white">{totalCrits + totalWarns + totalSuggs}</span>
+              </div>
+              <div className="bg-slate-900/50 border border-slate-800 p-5 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Scans Completed</p>
+                <span className="text-2xl font-black text-white">{totalScans}</span>
+              </div>
+            </div>
+
+            {/* Chart Area */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              {/* Score Trend Card */}
+              <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-5">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Vulnerability History (Score Trend)</h3>
+                <div className="h-64">
+                  {scoreTrendData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={scoreTrendData}>
+                        <defs>
+                          <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="name" stroke="#64748b" fontSize={9} />
+                        <YAxis domain={[0, 100]} stroke="#64748b" fontSize={9} />
+                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '12px' }} />
+                        <Area type="monotone" dataKey="Score" stroke="#6366f1" strokeWidth={2} fillOpacity={1} fill="url(#colorScore)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-xs text-slate-600">No scan trend data yet.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Severity Breakdown Card */}
+              <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-5">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Issues Severity breakdown</h3>
+                <div className="h-64">
+                  {totalScans > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={categoriesData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                        <XAxis dataKey="name" stroke="#64748b" fontSize={10} />
+                        <YAxis stroke="#64748b" fontSize={10} />
+                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '12px' }} />
+                        <Bar dataKey="count" radius={[8, 8, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-xs text-slate-600">No category breakdown data.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-64 text-slate-500">
             <Info className="w-12 h-12 mb-4 opacity-20" />
@@ -495,6 +663,12 @@ export default function Dashboard() {
           </div>
         )}
       </main>
+      {showCompareModal && (
+        <CompareModal
+          reviews={reviews}
+          onClose={() => setShowCompareModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -585,16 +759,31 @@ function ReviewRow({ title, repo, status, issues, date, onView }: any) {
 }
 
 function ReportModal({ review, onClose }: { review: any; onClose: () => void }) {
-  const rawIssues: any[] = review?.raw_response?.issues || [];
+  const rawIssues: any[] = review?.issues || review?.raw_response?.issues || [];
+  
+  // Filter state for severity
+  const [activeFilter, setActiveFilter] = useState<'all' | 'critical' | 'warning' | 'suggestion'>('all');
+
   const severityOrder: any = { critical: 0, warning: 1, suggestion: 2 };
-  const sorted = [...rawIssues].sort((a, b) =>
+  
+  const filteredIssues = rawIssues.filter((issue: any) => {
+    const sev = (issue.severity || '').toLowerCase();
+    if (activeFilter === 'all') return true;
+    return sev === activeFilter;
+  });
+
+  const sorted = [...filteredIssues].sort((a, b) =>
     (severityOrder[a.severity?.toLowerCase()] ?? 3) - (severityOrder[b.severity?.toLowerCase()] ?? 3)
   );
 
   const severityStyle: any = {
-    critical:   { badge: 'bg-red-500/20 text-red-400 border border-red-500/30',   dot: 'bg-red-500',    label: 'CRITICAL' },
-    warning:    { badge: 'bg-amber-500/20 text-amber-400 border border-amber-500/30', dot: 'bg-amber-500', label: 'WARNING' },
-    suggestion: { badge: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30', dot: 'bg-emerald-500', label: 'SUGGESTION' },
+    critical:   { badge: 'bg-red-500/20 text-red-400 border border-red-500/30',   dot: 'bg-red-500',    label: 'CRITICAL', text: 'text-red-400' },
+    warning:    { badge: 'bg-amber-500/20 text-amber-400 border border-amber-500/30', dot: 'bg-amber-500', label: 'WARNING', text: 'text-amber-400' },
+    suggestion: { badge: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30', dot: 'bg-emerald-500', label: 'SUGGESTION', text: 'text-emerald-400' },
+  };
+
+  const getCount = (sev: string) => {
+    return rawIssues.filter((issue: any) => (issue.severity || '').toLowerCase() === sev).length;
   };
 
   return (
@@ -636,17 +825,45 @@ function ReportModal({ review, onClose }: { review: any; onClose: () => void }) 
           </div>
         </div>
 
+        {/* Tabs for Filtering Severity */}
+        <div className="px-6 py-3 bg-slate-900 border-b border-slate-800 flex gap-2">
+          <button 
+            onClick={() => setActiveFilter('all')} 
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeFilter === 'all' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+          >
+            All ({rawIssues.length})
+          </button>
+          <button 
+            onClick={() => setActiveFilter('critical')} 
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeFilter === 'critical' ? 'bg-red-900/40 text-red-400 border border-red-500/20' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+          >
+            Critical ({getCount('critical')})
+          </button>
+          <button 
+            onClick={() => setActiveFilter('warning')} 
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeFilter === 'warning' ? 'bg-amber-900/40 text-amber-400 border border-amber-500/20' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+          >
+            Warnings ({getCount('warning')})
+          </button>
+          <button 
+            onClick={() => setActiveFilter('suggestion')} 
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeFilter === 'suggestion' ? 'bg-emerald-900/40 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-400 hover:text-white'}`}
+          >
+            Suggestions ({getCount('suggestion')})
+          </button>
+        </div>
+
         {/* Issues List */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Issues Found ({sorted.length})</h3>
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Issues Found ({sorted.length})</h3>
           {sorted.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-40 text-slate-600">
+            <div className="flex flex-col items-center justify-center h-60 text-slate-600">
               <CheckCircle2 className="w-10 h-10 mb-3 text-emerald-600" />
               <p className="text-sm font-medium text-slate-400">No issues detected</p>
-              <p className="text-xs text-slate-500 mt-1">The AI agents found no problems in this codebase.</p>
+              <p className="text-xs text-slate-500 mt-1">No issues match the selected severity filter.</p>
             </div>
           ) : sorted.map((issue: any, idx: number) => {
-            const sev = issue.severity?.toLowerCase() || 'suggestion';
+            const sev = (issue.severity || '').toLowerCase() || 'suggestion';
             const style = severityStyle[sev] || severityStyle.suggestion;
             return (
               <motion.div
@@ -654,24 +871,51 @@ function ReportModal({ review, onClose }: { review: any; onClose: () => void }) 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.05 }}
-                className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 hover:border-slate-600 transition-colors"
+                className="bg-slate-800/40 border border-slate-800 rounded-xl p-5 hover:border-slate-700 hover:bg-slate-800/60 transition-all shadow-md"
               >
-                <div className="flex items-start justify-between gap-3 mb-2">
+                {/* Meta details header */}
+                <div className="flex items-start justify-between gap-3 mb-3 pb-3 border-b border-slate-800">
                   <div className="flex items-center gap-2">
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${style.badge}`}>{style.label}</span>
                     <span className="text-slate-300 text-sm font-semibold">{issue.category}</span>
                   </div>
                   {issue.file_name && (
-                    <span className="text-xs text-slate-500 font-mono shrink-0">
+                    <span className="text-xs text-slate-400 font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800 shrink-0">
                       {issue.file_name}{issue.line_number ? `:${issue.line_number}` : ''}
                     </span>
                   )}
                 </div>
-                <p className="text-slate-300 text-sm leading-relaxed">{issue.issue_description}</p>
+                
+                {/* Issue Description */}
+                <div className="mb-4">
+                  <p className="text-slate-200 text-sm font-medium leading-relaxed">
+                    {issue.description || issue.issue_description}
+                  </p>
+                </div>
+
+                {/* Technical Explanation */}
+                {issue.explanation && (
+                  <div className="mb-4 p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+                    <p className="text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">🔬 Tech Analysis</p>
+                    <p className="text-xs text-slate-300 leading-relaxed">{issue.explanation}</p>
+                  </div>
+                )}
+
+                {/* Suggested Fix */}
                 {issue.suggested_fix && (
-                  <div className="mt-3 p-3 bg-slate-900 rounded-lg border border-slate-700">
-                    <p className="text-xs font-bold text-indigo-400 mb-1">💡 Suggested Fix</p>
-                    <p className="text-xs text-slate-400 leading-relaxed">{issue.suggested_fix}</p>
+                  <div className="mb-4 p-3 bg-indigo-950/20 rounded-lg border border-indigo-500/20">
+                    <p className="text-xs font-bold text-indigo-400 mb-1 uppercase tracking-wider">💡 How to Fix</p>
+                    <p className="text-xs text-slate-300 leading-relaxed">{issue.suggested_fix}</p>
+                  </div>
+                )}
+
+                {/* Improved Code Comparison Block */}
+                {issue.improved_code && (
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
+                    <p className="text-xs font-bold text-emerald-400 mb-1.5 uppercase tracking-wider">✨ Optimized Code</p>
+                    <pre className="text-[11px] font-mono text-emerald-300 overflow-x-auto p-2 bg-slate-950/80 rounded max-h-48">
+                      <code>{issue.improved_code}</code>
+                    </pre>
                   </div>
                 )}
               </motion.div>
@@ -680,10 +924,193 @@ function ReportModal({ review, onClose }: { review: any; onClose: () => void }) 
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900">
-          <p className="text-xs text-slate-500 text-center">Scanned on {review.created_at ? new Date(review.created_at).toLocaleString() : 'Unknown'} · Powered by Mistral via Ollama</p>
+        <div className="p-4 border-t border-slate-800 bg-slate-900 flex items-center justify-between">
+          <p className="text-xs text-slate-500">Scanned on {review.created_at ? new Date(review.created_at).toLocaleString() : 'Unknown'} · Powered by Mistral via Ollama</p>
+          <a
+            href={`/report/${review.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg transition-all shadow-lg shadow-indigo-500/20"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Full Report
+          </a>
         </div>
       </motion.div>
     </motion.div>
   );
 }
+
+
+function CompareModal({ reviews, onClose }: { reviews: any[]; onClose: () => void }) {
+  const [idA, setIdA] = useState<string>('');
+  const [idB, setIdB] = useState<string>('');
+  const [comparison, setComparison] = useState<any | null>(null);
+
+  const handleCompare = () => {
+    const rA = reviews.find(r => String(r.id) === idA);
+    const rB = reviews.find(r => String(r.id) === idB);
+    if (!rA || !rB) return;
+
+    const issuesA = rA.issues || rA.raw_response?.issues || [];
+    const issuesB = rB.issues || rB.raw_response?.issues || [];
+
+    const keysA = new Set(issuesA.map((i: any) => `${i.category}:${i.description || i.issue_description}`));
+    const keysB = new Set(issuesB.map((i: any) => `${i.category}:${i.description || i.issue_description}`));
+
+    const resolved = issuesA.filter((i: any) => !keysB.has(`${i.category}:${i.description || i.issue_description}`));
+    const introduced = issuesB.filter((i: any) => !keysA.has(`${i.category}:${i.description || i.issue_description}`));
+
+    const deltaScore = (rB.overall_score || 0) - (rA.overall_score || 0);
+
+    setComparison({
+      scoreA: rA.overall_score || 0,
+      scoreB: rB.overall_score || 0,
+      deltaScore,
+      resolved,
+      introduced,
+      titleA: rA.pull_request?.title || rA.pr_title || `Scan #${rA.id}`,
+      titleB: rB.pull_request?.title || rB.pr_title || `Scan #${rB.id}`,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-slate-900 border border-slate-800 w-full max-w-4xl rounded-2xl flex flex-col h-[600px] overflow-hidden shadow-2xl"
+      >
+        {/* Header */}
+        <div className="p-4 border-b border-slate-800 bg-slate-950/40 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-white">Compare Scan History</h3>
+            <p className="text-[10px] text-slate-400">Select two scans to analyze changes, improvements, and new issues.</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Picker Row */}
+        <div className="p-4 bg-slate-950/20 border-b border-slate-800/60 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Base Scan (Scan A)</label>
+            <select
+              value={idA}
+              onChange={(e) => { setIdA(e.target.value); setComparison(null); }}
+              className="w-full bg-slate-900 border border-slate-800 text-xs text-white rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+            >
+              <option value="">Select scan...</option>
+              {reviews.map(r => (
+                <option key={r.id} value={String(r.id)}>
+                  #{r.id} - {r.pull_request?.title || r.pr_title || 'Scan'} ({new Date(r.created_at).toLocaleDateString()})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Target Scan (Scan B)</label>
+            <select
+              value={idB}
+              onChange={(e) => { setIdB(e.target.value); setComparison(null); }}
+              className="w-full bg-slate-900 border border-slate-800 text-xs text-white rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+            >
+              <option value="">Select scan...</option>
+              {reviews.map(r => (
+                <option key={r.id} value={String(r.id)}>
+                  #{r.id} - {r.pull_request?.title || r.pr_title || 'Scan'} ({new Date(r.created_at).toLocaleDateString()})
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            onClick={handleCompare}
+            disabled={!idA || !idB || idA === idB}
+            className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white rounded-lg transition-colors"
+          >
+            Compare Now
+          </button>
+        </div>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {!comparison ? (
+            <div className="flex flex-col items-center justify-center h-full text-slate-500">
+              <Zap className="w-12 h-12 mb-3 opacity-20 text-indigo-400" />
+              <p className="text-sm font-semibold">Select two different scans above to run comparison.</p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Score ring delta row */}
+              <div className="bg-slate-950/40 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-around gap-4 text-center">
+                <div>
+                  <p className="text-2xl font-black text-slate-300">{Math.round(comparison.scoreA)}</p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Base Score</p>
+                </div>
+                <div className="text-4xl text-slate-700">→</div>
+                <div>
+                  <p className="text-2xl font-black text-indigo-400">{Math.round(comparison.scoreB)}</p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Target Score</p>
+                </div>
+                <div className="h-10 w-[1px] bg-slate-800 hidden sm:block" />
+                <div>
+                  <p className={`text-3xl font-black ${
+                    comparison.deltaScore > 0 ? 'text-emerald-400' : comparison.deltaScore < 0 ? 'text-red-400' : 'text-slate-400'
+                  }`}>
+                    {comparison.deltaScore > 0 ? `+${Math.round(comparison.deltaScore)}` : Math.round(comparison.deltaScore)}
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Score Delta</p>
+                </div>
+              </div>
+
+              {/* Breakdown lists */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Resolved column */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-black uppercase text-emerald-400 pb-2 border-b border-emerald-500/20 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Resolved Issues ({comparison.resolved.length})
+                  </h4>
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {comparison.resolved.map((issue: any, idx: number) => (
+                      <div key={idx} className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-lg text-xs">
+                        <p className="font-semibold text-emerald-400 mb-0.5">{issue.category}</p>
+                        <p className="text-slate-300 mb-1">{issue.description || issue.issue_description}</p>
+                        {issue.file_name && <p className="text-[10px] text-slate-500 font-mono">{issue.file_name.split('/').pop()}</p>}
+                      </div>
+                    ))}
+                    {comparison.resolved.length === 0 && (
+                      <p className="text-xs text-slate-500 italic py-4">No issues resolved between these scans.</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Introduced column */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-black uppercase text-red-400 pb-2 border-b border-red-500/20 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    New Issues Introduced ({comparison.introduced.length})
+                  </h4>
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {comparison.introduced.map((issue: any, idx: number) => (
+                      <div key={idx} className="p-3 bg-red-500/5 border border-red-500/10 rounded-lg text-xs">
+                        <p className="font-semibold text-red-400 mb-0.5">{issue.category}</p>
+                        <p className="text-slate-300 mb-1">{issue.description || issue.issue_description}</p>
+                        {issue.file_name && <p className="text-[10px] text-slate-500 font-mono">{issue.file_name.split('/').pop()}</p>}
+                      </div>
+                    ))}
+                    {comparison.introduced.length === 0 && (
+                      <p className="text-xs text-slate-500 italic py-4">No new issues introduced.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+

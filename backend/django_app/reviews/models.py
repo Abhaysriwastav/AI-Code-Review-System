@@ -23,6 +23,7 @@ class ReviewIssue(models.Model):
     suggested_fix = models.TextField()
     improved_code = models.TextField()
     confidence_score = models.FloatField()
+    compliance_tag = models.CharField(max_length=100, blank=True, default='')
 
     def __str__(self):
         return f"{self.severity} - {self.file_name}:{self.line_number}"

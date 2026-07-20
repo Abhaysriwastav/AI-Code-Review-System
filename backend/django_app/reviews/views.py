@@ -1,4 +1,6 @@
 from rest_framework import viewsets, permissions
+import os
+from django.http import JsonResponse
 from .models import Review, ReviewIssue
 from rest_framework import serializers
 
@@ -24,3 +26,18 @@ class ReviewViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return Review.objects.all().order_by('-created_at')
+
+# New top‑level view that returns the markdown report
+def report_view(request):
+    """Return the generated code review report markdown.
+
+    The report is stored in the Antigravity IDE artifact directory.
+    """
+    report_path = os.path.join(os.path.dirname(__file__), 'code_review_report.md')
+    try:
+        with open(report_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return JsonResponse({"markdown": content})
+    except FileNotFoundError:
+        return JsonResponse({"error": "Report not found"}, status=404)
+

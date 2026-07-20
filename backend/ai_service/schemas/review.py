@@ -24,6 +24,7 @@ class CodeIssue(BaseModel):
     suggested_fix: str
     improved_code: str
     confidence_score: float = Field(..., ge=0, le=1)
+    compliance_tag: Optional[str] = ""
 
 class ReviewSummary(BaseModel):
     total_issues: int

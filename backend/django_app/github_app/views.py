@@ -76,6 +76,8 @@ def scan_local_folder(request):
                 ai_service_url = f"{settings.AI_SERVICE_URL}/scan-local"
                 # Use a 10-minute timeout — Ollama on CPU is slow
                 response = http_requests.post(ai_service_url, json={'path': path}, timeout=600)
+                if response.status_code != 200:
+                    raise Exception(f"AI Service returned status code {response.status_code}: {response.text}")
                 ai_result = response.json()
 
                 from reviews.models import Review
@@ -109,10 +111,18 @@ def scan_local_folder(request):
                 warnings = sum(1 for i in issues_list if isinstance(i, dict) and i.get('severity','').lower() == 'warning')
                 suggestions = sum(1 for i in issues_list if isinstance(i, dict) and i.get('severity','').lower() == 'suggestion')
 
+                # Compute score dynamically: start at 100 and deduct per issue severity
+                # Clean repos get 95, floor is 20 for very buggy code
+                total_issues = len(issues_list)
+                if total_issues == 0:
+                    computed_score = 95.0
+                else:
+                    computed_score = max(20.0, 100.0 - (crits * 5) - (warnings * 3) - (suggestions * 1))
+
                 review = Review.objects.create(
                     pull_request=local_pr,
                     summary=ai_result.get('summary', f'Local scan of {path}'),
-                    overall_score=80.0,
+                    overall_score=computed_score,
                     total_issues=len(issues_list),
                     critical_issues=crits,
                     warning_issues=warnings,
@@ -121,8 +131,12 @@ def scan_local_folder(request):
                 )
 
                 from reviews.models import ReviewIssue
+                # Confidence defaults by severity when AI doesn't emit one
+                sev_confidence_defaults = {'critical': 0.92, 'warning': 0.78, 'suggestion': 0.65}
                 for issue in issues_list:
                     if isinstance(issue, dict):
+                        sev_key = issue.get('severity', 'suggestion').lower()
+                        default_conf = sev_confidence_defaults.get(sev_key, 0.70)
                         ReviewIssue.objects.create(
                             review=review,
                             file_name=issue.get('file_name', 'unknown'),
@@ -133,7 +147,8 @@ def scan_local_folder(request):
                             explanation=issue.get('explanation', ''),
                             suggested_fix=issue.get('suggested_fix', ''),
                             improved_code=issue.get('improved_code', ''),
-                            confidence_score=issue.get('confidence_score', 0.0)
+                            confidence_score=float(issue.get('confidence_score') or default_conf),
+                            compliance_tag=issue.get('compliance_tag', ''),
                         )
             except Exception as e:
                 import traceback
@@ -154,10 +169,27 @@ def scan_local_folder(request):
 
 @csrf_exempt
 def list_desktop_folders(request):
+    """List folders at a given subpath under /desktop. Accepts ?path=sub/folder"""
     try:
         import requests
+        subpath = request.GET.get('path', '')
         ai_service_url = f"{settings.AI_SERVICE_URL}/list-desktop-folders"
-        response = requests.get(ai_service_url)
+        response = requests.get(ai_service_url, params={'path': subpath})
         return JsonResponse(response.json())
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+def chat_about_issue(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+    try:
+        import requests
+        body = json.loads(request.body)
+        ai_service_url = f"{settings.AI_SERVICE_URL}/chat"
+        response = requests.post(ai_service_url, json=body, timeout=300)
+        return JsonResponse(response.json(), status=response.status_code)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
