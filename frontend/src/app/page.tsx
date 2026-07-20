@@ -4,6 +4,24 @@ import { Zap, Github, ArrowRight, Shield, Code, Cpu } from 'lucide-react';
 export default function Home() {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      {/* Top Header Navbar */}
+      <header className="absolute top-0 left-0 w-full z-20 flex items-center justify-between p-6 max-w-7xl mx-auto inset-x-0">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/30">
+            <Zap className="w-5 h-5 text-white" />
+          </div>
+          <span className="text-xl font-bold tracking-tight text-white">Code Reviewer</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <Link href="/login" className="px-4 py-2 text-slate-300 hover:text-white text-sm font-semibold transition-colors">
+            Sign In
+          </Link>
+          <Link href="/register" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-xl transition-all shadow-md shadow-indigo-500/20">
+            Create Account
+          </Link>
+        </div>
+      </header>
+
       {/* Background Gradients */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
         <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-indigo-500/10 rounded-full blur-[120px]" />

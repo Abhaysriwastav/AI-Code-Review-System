@@ -20,8 +20,10 @@ import {
   X,
   ChevronRight,
   ExternalLink,
-  Sparkles
+  Sparkles,
+  LogOut
 } from 'lucide-react';
+import { getUser, removeUser, UserProfile } from '@/lib/auth';
 import { motion } from 'framer-motion';
 import { 
   BarChart, 
@@ -53,6 +55,8 @@ const agents = [
 ];
 
 export default function Dashboard() {
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedReview, setSelectedReview] = useState<any | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -116,6 +120,10 @@ export default function Dashboard() {
   useEffect(() => {
     fetchReviews();
     
+    // Load user profile
+    const u = getUser();
+    setCurrentUser(u);
+
     // Load settings from localStorage
     const model = localStorage.getItem('review_settings_model');
     const url = localStorage.getItem('review_settings_url');
@@ -129,6 +137,15 @@ export default function Dashboard() {
     if (maxLines) setSettingsMaxLines(Number(maxLines));
     if (skipDirs) setSettingsSkipDirs(skipDirs);
   }, []);
+
+  const handleLogout = async () => {
+    try {
+      await fetch('http://localhost:8000/api/github/auth/logout/', { method: 'POST' });
+    } catch (_) {}
+    removeUser();
+    setCurrentUser(null);
+    router.push('/login');
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -334,14 +351,23 @@ export default function Dashboard() {
           <NavItem icon={Settings} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
         </nav>
 
-        <div className="mt-auto pt-6 border-t border-slate-800">
+        <div className="mt-auto pt-6 border-t border-slate-800 space-y-3">
           <div className="flex items-center gap-3 px-2">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500" />
-            <div>
-              <p className="text-sm font-medium">Abhay S.</p>
-              <p className="text-xs text-slate-400">Pro Developer</p>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-xs text-white shrink-0">
+              {(currentUser?.name || currentUser?.username || 'U').charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-white truncate">{currentUser?.name || currentUser?.username || 'Guest User'}</p>
+              <p className="text-[10px] text-slate-400 truncate">{currentUser?.email || 'Guest Session'}</p>
             </div>
           </div>
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-2.5 px-3 py-2 bg-slate-950 hover:bg-red-500/10 text-slate-400 hover:text-red-400 border border-slate-800 hover:border-red-500/20 rounded-xl text-xs font-bold transition-all"
+          >
+            <LogOut className="w-4 h-4 shrink-0" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </motion.aside>
 
