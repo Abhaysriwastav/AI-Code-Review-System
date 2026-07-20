@@ -12,3 +12,4 @@ django-filter
 gunicorn
 uvicorn
 whitenoise
+pydantic[email]>=2.0.0
